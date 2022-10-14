@@ -1,0 +1,19 @@
+[tool.poetry]
+name = "oprograma"
+version = "0.1.0"
+description = ""
+authors = ["João Paulo Taylor Ienczak Zanette <jpaulotiz@gmail.com>"]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+selenium = "^4.5.0"
+selenium-firefox = "^2.0.7"
+openpyxl = "^3.0.10"
+
+[tool.poetry.dev-dependencies]
+mypy = "^0.982"
+pylint = "^2.15.4"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
