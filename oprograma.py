@@ -1,3 +1,4 @@
+import time
 from pathlib import Path
 from dataclasses import dataclass
 
@@ -15,10 +16,25 @@ SEND_BUTTON_XPATH = '//button[@data-testid="compose-btn-send"]'
 
 
 MESSAGE_FORMAT = """
-    Olá, {nome}! Esta é uma mensagem de teste sendo enviada pelo programa da
-    UP. Se você recebeu esta mensagem, então quer dizer que o programa funciona
-    :)
+Bom dia, camarada!
+
+Estou entrando em contato com você em nome da Unidade Popular Pelo Socialismo
+de Santa Catarina!
+
+Você preencheu o formulário de pré-filiação e por isso estamos entrando em
+contato para te convidar pra uma primeira atividade!
+
+No sábado (15/10) às 17:30 vamos realizar uma Plenária de apresentação da UP.
+Para além disso, vamos debater sobre nossa atuação nesse segundo turno das
+eleições e a postura do nosso partido para combatermos o avanço do fascismo no
+nosso país.
+
+Essa plenária vai acontecer de forma híbrida para aqueles que não moram em
+Florianópolis possam participar também! Caso possa participar nos avise que te
+passamos melhor as informações!
 """
+
+CONTACTED_LIST_FILE = Path("lista_contactados.txt")
 
 
 def connect_to_wpp(user_data_dir: Path = Path('.') / 'chrome-data') -> WebDriver:
@@ -65,6 +81,10 @@ def normalize_number(number: str) -> str:
 
     numbers_only = ''.join(re.findall(r'\d', number))
 
+    # Já tem o +55 e já tem o 9 extra mas não tem o 0
+    if len(numbers_only) == len('5548999999999'):
+        return f"55{numbers_only.lstrip('55')}"
+
     # Falta só o +55 e já tem o 9 extra
     if len(numbers_only) == len('048999999999'):
         return f"55{numbers_only}"
@@ -81,8 +101,6 @@ def normalize_number(number: str) -> str:
     if len(numbers_only) == len('4899999999'):
         return f"550{numbers_only}"
 
-    # Já tem o 9 extra:
-
     # Tem tudo:
     return numbers_only
 
@@ -97,22 +115,42 @@ def load_contacts(sheet_path: Path) -> list[Contact]:
         if all(x is None for x in line):
             break
 
-        _, state, name, number, contacted, *_ = line
+        _, state, name, number, contacted, _, email, *_ = line
+
+        if (state is None
+            or name is None
+            or number is None
+            or (email is not None
+                and email.lower().strip() in ['repetido', 's/whats'])
+        ):
+            print(f"Pulando {name, number, email}")
+            continue
+
+        norm_number = normalize_number(str(number).removesuffix('.0'))
+        number = norm_number
+
+        for c in contacts:
+            if name == c.name or number == c.number:
+                print(
+                    f"Pulando {name} "
+                    f"(repetido: {c.name} = {name}, {c.number} = {number})"
+                )
+                continue
 
         contacts.append(Contact(
             name=name,
             state=state,
-            number=normalize_number(str(number)),
-            contacted=contacted == '=TRUE()',
+            number=number,
+            contacted=contacted == '=TRUE()' if not isinstance(contacted, bool) else contacted,
         ))
 
     return contacts
 
 
 def make_message(contact: Contact) -> str:
-    return ' '.join([s.strip() for s in MESSAGE_FORMAT.split('\n')]).format(
+    return ' '.join([s.strip() if s else '\n\n' for s in MESSAGE_FORMAT.split('\n')]).format(
         nome=contact.name.split()[0],
-    ).strip()
+    ).strip().replace('\n', '%0a')
 
 
 if __name__ == '__main__':
@@ -120,25 +158,55 @@ if __name__ == '__main__':
 
     contacts = load_contacts(Path('CONTATOS UNIDADE POPULAR -SC.xlsx'))
 
-    if len(sys.argv) > 1 and sys.argv[1] == '--ver-contatos':
-        from pprint import pprint
-        pprint(contacts)
-        for contact in contacts:
-            msg = make_message(contact)
-            print(f"{msg=}")
+    start = 0
+    for arg in sys.argv:
+        try:
+            start = int(arg)
+            break
+        except:
+            pass
+
+    not_contacted = [c for c in contacts[start:] if not c.contacted]
+    print(f"Primeiro não contactado {not_contacted[0].name} (i = {contacts.index(not_contacted[0])})")
+
+    if '--ver-contatos' in sys.argv:
+        for i, contact in enumerate(contacts[start:], start=start):
+            if contact.contacted:
+                print(f"-- {i}: Pulando {contact.name} (já foi entrado em contato)")
+                continue
+
+            print(f'== {i} Enviando mensagem para {contact.name} ({contact.number})')
         exit(0)
+
+    not_contacted = [c for c in contacts[start:] if not c.contacted]
+    start = contacts.index(not_contacted[0])
 
     with connect_to_wpp() as driver:
         wait_for_qrcode_scan(driver)
 
         print(f"{driver.get_cookies()=}")
 
-        for contact in contacts:
-            # to = '5504896870888'
+        x = 0
+        for i, contact in enumerate(contacts[start:], start=start):
+            if x == 10:
+                print("Esperando um pouco enviar as que já foram...")
+                time.sleep(10)
+
             if contact.contacted:
-                print(f"Pulando {contact.name} (já foi entrado em contato)")
+                print(f"-- {i}: Pulando {contact.name} (já foi entrado em contato)")
                 continue
 
-            print(f'Enviando mensagem para {contact.name} ({contact.number})')
+            x += 1
+
+            print(f'== {i} Enviando mensagem para {contact.name} ({contact.number})')
             msg = make_message(contact)
-            send_message(driver, to=contact.number, msg=msg)
+            try:
+                send_message(driver, to=contact.number, msg=msg)
+                time.sleep(2)
+                result = "Contactado"
+            except:
+                print(f"Não deu para mandar mensagem para {contact.name}")
+                result = "Deu erro"
+
+            with open(CONTACTED_LIST_FILE, "a") as f:
+                f.write(f"\n{contact.name}, {contact.number}, {contact.state} ({result})")
